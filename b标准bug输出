@@ -1,0 +1,50 @@
+我会给你提供接口：cURL、payload、response，根据报错内容，选择以下5个场景最符合的一个模版，不要修改以下内容，直接在聊天框输出
+ 1、#后端bug：
+### [后端] 优惠券核销失败 - 状态不一致
+- **接口**: `POST /api/v1/order/settle`
+- **输入 (Payload)**: `{"orderId": "ORD_998", "couponId": "C_552"}`
+- **报错详情**:
+  > `Exception: CouponAlreadyUsedException at OrderServiceImpl.java:214`
+- **数据库现状**:
+    - `orders` 表已生成记录，但 `coupons` 表状态仍为 `1 (Available)`。
+- **怀疑点**: 事务回滚失效，或者缓存（Redis）先于 DB 更新。
+
+
+2、# 业务
+### [业务] 阶梯折扣计算错误
+- **场景**: 满 100 减 10，满 200 减 30。
+- **输入**: 商品 A($120$) + 商品 B($90$) = 总计 $210$。
+- **预期**: 应触发满 200 减 30，实付 $180$。
+- **实际**: 仅触发满 100 减 10，实付 $200$。
+- **关键数据**:
+    - `calc_engine_log`: "Evaluating rule_id: 101 (Success), rule_id: 102 (Skipped)".
+- **怀疑点**: 优惠券叠加逻辑互斥，导致高阶规则被低阶规则覆盖。
+
+3、### [业务] 自动续费逻辑错误
+- **初始状态**: 用户 A (VIP 到期日: 2026-03-20)，余额 50 元。
+- **触发动作**: 执行 `cron_job_renew` 自动续费任务。
+- **业务链路**:
+    1. 扣款 $49$ 元 (成功)
+    2. 更新 VIP 到期日
+- **错误表现**:
+    - **实际**: VIP 到期日变成了 `2026-04-20`（正确），但用户余额变成了 `-48` 元（扣了两次）。
+- **怀疑点**: 幂等校验失效，重试机制导致了重复扣款。
+
+4、### [业务] 订单状态机流转异常
+- **触发接口**: `POST /api/orders/{id}/cancel`
+- **业务场景**: 用户在支付倒计时最后一秒点击取消，同时系统执行自动关闭。
+- **参数 (Payload)**: `{"reason": "user_cancel", "timestamp": 1710921600}`
+- **逻辑矛盾**:
+    - **预期**: 订单状态为 `CANCELLED`，退回库存。
+    - **实际**: 接口返回 `200 OK`，但订单状态跳回了 `PAID`。
+- **关键日志**:
+  > `Duplicate key value violates unique constraint 'uk_order_status_flow'`
+
+5、# 视图
+### [视图] 移动端导航栏在横屏下遮挡内容
+- **视觉现象**: 切换横屏后，Header 盖住了正文前两行，且无法滚动。
+- **关键属性**:
+    - Header: `position: fixed; height: 60px;`
+    - Container: `padding-top: 60px;`
+- **复现路径**: 竖屏进入页面 -> 旋转屏幕。
+- **怀疑点**: 媒体查询（Media Query）未针对 `landscape` 模式重置 `padding`。
